@@ -180,15 +180,15 @@ function(print_build_info)
   # Optimization Flags
   # ===========================================================================
   message(STATUS "Optimization:")
-  
-  # Проверяем оптимизацию уровня компиляции
+
+  # Checking compilation level optimization
   if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-O[0-3]|/O[0-9]")
     message(STATUS "  Release Optimization: Enabled")
   else()
     message(STATUS "  Release Optimization: Not explicitly set")
   endif()
 
-  # Проверяем LTO: сначала в target properties (приоритет), затем в глобальных флагах
+  # Checking LTO: first in target properties (priority), then in global flags
   set(lto_enabled FALSE)
   if(BUILD_INFO_TARGET AND TARGET ${BUILD_INFO_TARGET})
     get_target_property(target_link_opts ${BUILD_INFO_TARGET} LINK_OPTIONS)
@@ -199,7 +199,7 @@ function(print_build_info)
       set(lto_enabled TRUE)
     endif()
   endif()
-  # Fallback: проверяем глобальные флаги
+  # Fallback: checking global flags
   if(NOT lto_enabled AND CMAKE_CXX_FLAGS_RELEASE MATCHES "-flto|/LTCG|/GL")
     set(lto_enabled TRUE)
   endif()
@@ -209,7 +209,7 @@ function(print_build_info)
     message(STATUS "  Link-Time Optimization (LTO): Disabled")
   endif()
 
-  # Проверяем PGO: target properties, затем глобальные
+  # Checking PGO: target properties, then global flags
   set(pgo_enabled FALSE)
   if(BUILD_INFO_TARGET AND TARGET ${BUILD_INFO_TARGET})
     get_target_property(target_link_opts ${BUILD_INFO_TARGET} LINK_OPTIONS)
@@ -229,7 +229,7 @@ function(print_build_info)
     message(STATUS "  Profile-Guided Optimization (PGO): Disabled")
   endif()
 
-  # Проверяем векторизацию
+  # Check for vectorization
   if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-mavx|-msse|/arch:")
     message(STATUS "  Hardware Vectorization: Enabled")
   else()
