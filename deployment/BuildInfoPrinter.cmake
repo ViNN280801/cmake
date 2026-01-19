@@ -180,27 +180,56 @@ function(print_build_info)
   # Optimization Flags
   # ===========================================================================
   message(STATUS "Optimization:")
+  
+  # Проверяем оптимизацию уровня компиляции
   if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-O[0-3]|/O[0-9]")
     message(STATUS "  Release Optimization: Enabled")
   else()
     message(STATUS "  Release Optimization: Not explicitly set")
   endif()
 
-  # Check for LTO
-  if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-flto|/LTCG|/GL")
+  # Проверяем LTO: сначала в target properties (приоритет), затем в глобальных флагах
+  set(lto_enabled FALSE)
+  if(BUILD_INFO_TARGET AND TARGET ${BUILD_INFO_TARGET})
+    get_target_property(target_link_opts ${BUILD_INFO_TARGET} LINK_OPTIONS)
+    get_target_property(target_compile_opts ${BUILD_INFO_TARGET} COMPILE_OPTIONS)
+    if(target_link_opts AND "${target_link_opts}" MATCHES "-flto|/LTCG")
+      set(lto_enabled TRUE)
+    elseif(target_compile_opts AND "${target_compile_opts}" MATCHES "/GL")
+      set(lto_enabled TRUE)
+    endif()
+  endif()
+  # Fallback: проверяем глобальные флаги
+  if(NOT lto_enabled AND CMAKE_CXX_FLAGS_RELEASE MATCHES "-flto|/LTCG|/GL")
+    set(lto_enabled TRUE)
+  endif()
+  if(lto_enabled)
     message(STATUS "  Link-Time Optimization (LTO): Enabled")
   else()
     message(STATUS "  Link-Time Optimization (LTO): Disabled")
   endif()
 
-  # Check for PGO
-  if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-fprofile|/GENPROFILE|/USEPROFILE")
+  # Проверяем PGO: target properties, затем глобальные
+  set(pgo_enabled FALSE)
+  if(BUILD_INFO_TARGET AND TARGET ${BUILD_INFO_TARGET})
+    get_target_property(target_link_opts ${BUILD_INFO_TARGET} LINK_OPTIONS)
+    get_target_property(target_compile_opts ${BUILD_INFO_TARGET} COMPILE_OPTIONS)
+    if(target_link_opts AND "${target_link_opts}" MATCHES "-fprofile|/GENPROFILE|/USEPROFILE")
+      set(pgo_enabled TRUE)
+    elseif(target_compile_opts AND "${target_compile_opts}" MATCHES "-fprofile|/GENPROFILE|/USEPROFILE")
+      set(pgo_enabled TRUE)
+    endif()
+  endif()
+  if(NOT pgo_enabled AND CMAKE_CXX_FLAGS_RELEASE MATCHES "-fprofile|/GENPROFILE|/USEPROFILE")
+    set(pgo_enabled TRUE)
+  endif()
+  if(pgo_enabled)
     message(STATUS "  Profile-Guided Optimization (PGO): Enabled")
   else()
     message(STATUS "  Profile-Guided Optimization (PGO): Disabled")
   endif()
 
-  # Check for vectorization
+  # Проверяем векторизацию
   if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-mavx|-msse|/arch:")
     message(STATUS "  Hardware Vectorization: Enabled")
   else()

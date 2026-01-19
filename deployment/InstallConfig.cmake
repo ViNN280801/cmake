@@ -108,12 +108,12 @@ function(configure_install_rules target)
     foreach(include_dir ${INSTALL_INCLUDE_DIRS})
       install(DIRECTORY ${include_dir}
         DESTINATION ${INSTALL_INCLUDE_DEST}
+        COMPONENT Development
         FILES_MATCHING
         PATTERN "*.h"
         PATTERN "*.hpp"
         PATTERN "*.hxx"
         PATTERN "*.inl"
-        COMPONENT Development
       )
     endforeach()
   endif()

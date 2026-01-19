@@ -115,8 +115,14 @@ function(add_boost_dependency)
   endif()
 
   # Set default components
+  #
+  # IMPORTANT:
+  # - Many Boost libraries (e.g. span, string_view, dynamic_bitset, variant, container) are header-only.
+  # - Requiring binary components by default (system/filesystem/...) breaks "header-only usage" setups
+  #   where developers only have BOOST_ROOT pointing to headers without built libs.
+  # - Therefore, default is EMPTY. Projects that need binary Boost libs must request them explicitly.
   if(NOT BOOST_DEP_COMPONENTS)
-    set(BOOST_DEP_COMPONENTS system filesystem)
+    set(BOOST_DEP_COMPONENTS "")
   endif()
 
   # Set default for REQUIRED
@@ -211,7 +217,7 @@ function(_add_boost_dependency_fetch version git_repo git_tag components build_s
   # Check CMake version
   if(CMAKE_VERSION VERSION_LESS "3.11")
     message(FATAL_ERROR "BoostConfig: CMake 3.11+ required for FetchContent. "
-                        "Current version: ${CMAKE_VERSION}")
+      "Current version: ${CMAKE_VERSION}")
   endif()
 
   include(FetchContent)
@@ -267,15 +273,114 @@ endfunction()
 #   required    - Whether Boost is required
 # =============================================================================
 function(_add_boost_dependency_find version components required)
+  # ================================================================
+  # ENV{BOOST_ROOT} has the highest priority
+  #
+  # Rationale:
+  # - Different developers can have Boost installed in different locations.
+  # - We must not hardcode machine-specific paths into repository files.
+  # - When BOOST_ROOT is set in the environment, it should override cache/default discovery.
+  #
+  # Notes:
+  # - FindBoost supports both BOOST_ROOT and Boost_ROOT/Boost_DIR in various CMake versions.
+  # - We set both BOOST_ROOT and Boost_ROOT for maximum compatibility.
+  # - We do NOT FORCE cache values here, so CI/presets can still control behavior explicitly if needed.
+  # ================================================================
+  if(DEFINED ENV{BOOST_ROOT} AND NOT "$ENV{BOOST_ROOT}" STREQUAL "")
+    set(BOOST_ROOT "$ENV{BOOST_ROOT}")
+    set(Boost_ROOT "$ENV{BOOST_ROOT}")
+
+    # Optional strictness: if user explicitly points to Boost, prefer that path.
+    # This reduces accidental pickup of a different Boost from system locations.
+    set(Boost_NO_SYSTEM_PATHS ON)
+  endif()
+
+  # Filter header-only "components" out: FindBoost doesn't treat these as components in a reliable way,
+  # especially on modern CMake (CMP0167 / deprecation of FindBoost).
+  #
+  # These headers are provided by BOOST_ROOT include directory and do not require linking.
+  set(boost_header_only_components
+    container
+    variant
+    dynamic_bitset
+  )
+
+  set(boost_find_components "")
+  set(boost_ignored_components "")
+  foreach(comp IN LISTS components)
+    if(comp IN_LIST boost_header_only_components)
+      list(APPEND boost_ignored_components "${comp}")
+    else()
+      list(APPEND boost_find_components "${comp}")
+    endif()
+  endforeach()
+
+  if(boost_ignored_components)
+    message(STATUS "BoostConfig: Ignoring header-only components for find_package: ${boost_ignored_components}")
+  endif()
+
+  # Header-only mode:
+  # If user provided BOOST_ROOT and there are no binary components requested,
+  # treat Boost as header-only and avoid calling FindBoost (important for CMake 4.x / CMP0167).
+  if(DEFINED ENV{BOOST_ROOT} AND NOT "$ENV{BOOST_ROOT}" STREQUAL "" AND NOT boost_find_components)
+    set(Boost_FOUND TRUE)
+    set(Boost_INCLUDE_DIR "$ENV{BOOST_ROOT}")
+    set(Boost_INCLUDE_DIRS "$ENV{BOOST_ROOT}")
+
+    # ================================================================
+    # Defining Boost version from boost/version.hpp
+    #
+    # REASONING:
+    # - FindBoost doesn't call in header-only mode, so Boost_VERSION is not set automatically.
+    # - Version is necessary for diagnostics and build summary.
+    # - BOOST_VERSION format: MAJOR*100000 + MINOR*100 + PATCH (e.g. 108800 = 1.88.0)
+    #
+    # SAFETY:
+    # - file(READ) and regex are safe for missing-file (check EXISTS).
+    # - math(EXPR) is safe for integer division (guaranteed >= 0).
+    # ================================================================
+    set(boost_version_file "$ENV{BOOST_ROOT}/boost/version.hpp")
+    if(EXISTS "${boost_version_file}")
+      file(READ "${boost_version_file}" boost_version_content)
+      # Search for #define BOOST_VERSION 108800
+      if(boost_version_content MATCHES "#define[ \t]+BOOST_VERSION[ \t]+([0-9]+)")
+        set(boost_version_numeric "${CMAKE_MATCH_1}")
+        # Decode: 108800 = 1*100000 + 88*100 + 0 -> 1.88.0
+        math(EXPR boost_major "${boost_version_numeric} / 100000")
+        math(EXPR boost_minor "(${boost_version_numeric} / 100) % 1000")
+        math(EXPR boost_patch "${boost_version_numeric} % 100")
+        set(Boost_VERSION_STRING "${boost_major}.${boost_minor}.${boost_patch}")
+        set(Boost_VERSION "${Boost_VERSION_STRING}")
+        set(Boost_MAJOR_VERSION "${boost_major}")
+        set(Boost_MINOR_VERSION "${boost_minor}")
+        set(Boost_SUBMINOR_VERSION "${boost_patch}")
+        message(STATUS "BoostConfig: Detected Boost ${Boost_VERSION_STRING} from boost/version.hpp")
+      else()
+        # Fallback: use requested version
+        set(Boost_VERSION "${version}")
+        message(WARNING "BoostConfig: Could not parse BOOST_VERSION from boost/version.hpp; defaulting to ${version}")
+      endif()
+    else()
+      # File not found - use version from parameter
+      set(Boost_VERSION "${version}")
+      message(WARNING "BoostConfig: boost/version.hpp not found in BOOST_ROOT; defaulting to requested version ${version}")
+    endif()
+
+    _create_boost_interface_target("${components}")
+
+    message(STATUS "BoostConfig: Using header-only Boost from BOOST_ROOT='${Boost_INCLUDE_DIR}'")
+    return()
+  endif()
+
   if(required)
-    if(components)
-      find_package(Boost ${version} REQUIRED COMPONENTS ${components})
+    if(boost_find_components)
+      find_package(Boost ${version} REQUIRED COMPONENTS ${boost_find_components})
     else()
       find_package(Boost ${version} REQUIRED)
     endif()
   else()
-    if(components)
-      find_package(Boost ${version} QUIET COMPONENTS ${components})
+    if(boost_find_components)
+      find_package(Boost ${version} QUIET COMPONENTS ${boost_find_components})
     else()
       find_package(Boost ${version} QUIET)
     endif()
@@ -441,8 +546,25 @@ function(link_boost_to_target target)
     endforeach()
     message(STATUS "BoostConfig: Linked Boost components to '${target}': ${BOOST_LINK_COMPONENTS}")
   else()
-    # Link via interface target (if available)
-    if(TARGET ${interface_target})
+    # ================================================================
+    # Critical for clangd: DO NOT use target_link_libraries for header-only Boost!
+    #
+    # PROBLEM:
+    # - target_link_libraries() IMMEDIATELY passes INTERFACE_INCLUDE_DIRECTORIES as SYSTEM
+    # - MSVC generates /external:I BEFORE the explicit target_include_directories() takes effect
+    # - clangd sees "Unknown argument: '-external:I...'" and ignores Boost
+    #
+    # SOLUTION:
+    # - FOR header-only Boost (without .lib/.dll) DO NOT call target_link_libraries()
+    # - Directly add only include directories through target_include_directories()
+    # - This ensures a clean /I flag without /external: prefix
+    # ================================================================
+    if(Boost_INCLUDE_DIRS AND NOT Boost_LIBRARIES)
+      # Header-only mode: only include directories, WITHOUT linking
+      target_include_directories(${target} PRIVATE ${Boost_INCLUDE_DIRS})
+      message(STATUS "BoostConfig: Added Boost (header-only) include directories to '${target}': ${Boost_INCLUDE_DIRS}")
+    elseif(TARGET ${interface_target})
+      # Legacy mode: there are binary libraries, link via interface target
       target_link_libraries(${target} PRIVATE ${interface_target})
       message(STATUS "BoostConfig: Linked Boost to '${target}' via ${interface_target}")
     else()
@@ -454,7 +576,7 @@ function(link_boost_to_target target)
           message(STATUS "BoostConfig: Linked Boost to '${target}' via Boost_LIBRARIES")
         else()
           message(WARNING "BoostConfig: Interface target '${interface_target}' not found and Boost_LIBRARIES is empty. "
-                          "Call add_boost_dependency() first or specify COMPONENTS.")
+            "Call add_boost_dependency() first or specify COMPONENTS.")
         endif()
       else()
         message(FATAL_ERROR "BoostConfig: Boost not found. Call add_boost_dependency() first")
