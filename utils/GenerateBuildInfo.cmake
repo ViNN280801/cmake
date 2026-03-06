@@ -2,9 +2,334 @@
 # GenerateBuildInfo.cmake - Automatic build information generator
 # ============================================================== #
 # This module generates comprehensive build information files
-# containing compiler, system, and build configuration details
+# containing compiler, system, and build configuration details.
+#
+# Python-accelerated path (preferred)
+# ------------------------------------
+# When Python 3.8+ is available, the function generate_build_info_file()
+# delegates to cmake/utils/GenerateBuildInfo.py, which:
+#   - collects git metadata (branch, commit, dirty state, contributors)
+#   - collects CPU brand, SIMD feature flags, memory, disk, CI system
+#   - hashes the compiled binary (SHA-256 / SHA-512)
+#   - writes the report in one of four formats: txt, json, yaml, ini
+#
+# CMake-native fallback
+# ----------------------
+# When Python is unavailable, the original CMake implementation runs
+# and writes a plain-text report (always .txt regardless of format choice).
+#
+# Public API (unchanged):
+#   generate_build_info_file(<target> <output_file>)
+#   save_target_properties(<target> <output_cmake_file>)
+#
+# Python is detected once at include-time.  The result is cached in the
+# CMake variable GBINFO_PYTHON_EXECUTABLE (empty = not found / too old).
 
 include(CMakePackageConfigHelpers)
+
+# ==========================================================================
+# Python detection - runs once when this file is first included
+# ==========================================================================
+if(NOT DEFINED _GBINFO_PYTHON_CHECKED)
+    set(_GBINFO_PYTHON_CHECKED TRUE)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_FOUND AND Python3_VERSION VERSION_GREATER_EQUAL "3.8")
+        set(GBINFO_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}" CACHE INTERNAL
+            "Python3 interpreter used by GenerateBuildInfo")
+        message(STATUS
+            "GenerateBuildInfo: Python ${Python3_VERSION} found - will use "
+            "GenerateBuildInfo.py for rich build-info generation.")
+    else()
+        set(GBINFO_PYTHON_EXECUTABLE "" CACHE INTERNAL
+            "Python3 interpreter used by GenerateBuildInfo")
+        if(Python3_FOUND)
+            message(STATUS
+                "GenerateBuildInfo: Python ${Python3_VERSION} < 3.8 - "
+                "falling back to CMake-native implementation.")
+        else()
+            message(STATUS
+                "GenerateBuildInfo: Python3 not found - "
+                "falling back to CMake-native implementation.")
+        endif()
+    endif()
+endif()
+
+# ==========================================================================
+# Internal: write a JSON context file consumed by GenerateBuildInfo.py
+# ==========================================================================
+function(_gbinfo_write_context_json target_name context_file)
+    # ---- Helpers ----
+    macro(_gbinfo_get_prop _tgt _prop _var)
+        get_target_property(${_var} ${_tgt} ${_prop})
+        if(${_var} STREQUAL "${_var}-NOTFOUND" OR NOT DEFINED ${_var})
+            set(${_var} "")
+        endif()
+    endmacro()
+
+    # ---- Target properties ----
+    _gbinfo_get_prop(${target_name} TYPE _tgt_type)
+    _gbinfo_get_prop(${target_name} OUTPUT_NAME _tgt_out_name)
+    _gbinfo_get_prop(${target_name} RUNTIME_OUTPUT_DIRECTORY _tgt_out_dir)
+    _gbinfo_get_prop(${target_name} COMPILE_OPTIONS _tgt_compile_opts)
+    _gbinfo_get_prop(${target_name} LINK_OPTIONS _tgt_link_opts)
+    _gbinfo_get_prop(${target_name} COMPILE_DEFINITIONS _tgt_compile_defs)
+    _gbinfo_get_prop(${target_name} INCLUDE_DIRECTORIES _tgt_inc_dirs)
+    _gbinfo_get_prop(${target_name} LINK_LIBRARIES _tgt_link_libs)
+    _gbinfo_get_prop(${target_name} POSITION_INDEPENDENT_CODE _tgt_pic)
+    _gbinfo_get_prop(${target_name} CXX_STANDARD _tgt_cxx_std)
+
+    # Convert CMake lists to JSON arrays
+    macro(_list_to_json _listvar _jsonvar)
+        set(${_jsonvar} "[")
+        set(_first TRUE)
+        foreach(_item ${${_listvar}})
+            string(REPLACE "\\" "\\\\" _item "${_item}")
+            string(REPLACE "\"" "\\\"" _item "${_item}")
+            if(_first)
+                set(${_jsonvar} "${${_jsonvar}}\"${_item}\"")
+                set(_first FALSE)
+            else()
+                set(${_jsonvar} "${${_jsonvar}}, \"${_item}\"")
+            endif()
+        endforeach()
+        set(${_jsonvar} "${${_jsonvar}}]")
+    endmacro()
+
+    _list_to_json(_tgt_compile_opts _json_compile_opts)
+    _list_to_json(_tgt_link_opts _json_link_opts)
+    _list_to_json(_tgt_compile_defs _json_compile_defs)
+    _list_to_json(_tgt_inc_dirs _json_inc_dirs)
+    _list_to_json(_tgt_link_libs _json_link_libs)
+
+    # Sanitize a string for JSON (escape backslashes and double-quotes)
+    macro(_json_str _in _out)
+        string(REPLACE "\\" "\\\\" ${_out} "${_in}")
+        string(REPLACE "\"" "\\\"" ${_out} "${${_out}}")
+    endmacro()
+
+    _json_str("${PROJECT_NAME}" _j_proj_name)
+    _json_str("${PROJECT_VERSION}" _j_proj_ver)
+    _json_str("${CMAKE_SOURCE_DIR}" _j_src_dir)
+    _json_str("${CMAKE_BINARY_DIR}" _j_bin_dir)
+    _json_str("${CMAKE_INSTALL_PREFIX}" _j_install)
+    _json_str("${CMAKE_VERSION}" _j_cmake_ver)
+    _json_str("${CMAKE_GENERATOR}" _j_generator)
+    _json_str("${CMAKE_TOOLCHAIN_FILE}" _j_toolchain)
+    _json_str("${CMAKE_BUILD_TYPE}" _j_build_type)
+    _json_str("${CMAKE_CXX_COMPILER_ID}" _j_cxx_id)
+    _json_str("${CMAKE_CXX_COMPILER_VERSION}" _j_cxx_ver)
+    _json_str("${CMAKE_CXX_COMPILER}" _j_cxx_path)
+    _json_str("${CMAKE_CXX_STANDARD}" _j_cxx_std)
+    _json_str("${CMAKE_CXX_FLAGS}" _j_cxx_flags)
+    _json_str("${CMAKE_CXX_FLAGS_RELEASE}" _j_cxx_rel)
+    _json_str("${CMAKE_CXX_FLAGS_DEBUG}" _j_cxx_dbg)
+    _json_str("${CMAKE_CXX_FLAGS_RELWITHDEBINFO}" _j_cxx_rwd)
+    _json_str("${CMAKE_CXX_FLAGS_MINSIZEREL}" _j_cxx_min)
+    _json_str("${CMAKE_C_COMPILER_ID}" _j_c_id)
+    _json_str("${CMAKE_C_COMPILER_VERSION}" _j_c_ver)
+    _json_str("${CMAKE_C_COMPILER}" _j_c_path)
+    _json_str("${CMAKE_C_STANDARD}" _j_c_std)
+    _json_str("${CMAKE_EXE_LINKER_FLAGS}" _j_lnk_exe)
+    _json_str("${CMAKE_SHARED_LINKER_FLAGS}" _j_lnk_shared)
+    _json_str("${CMAKE_STATIC_LINKER_FLAGS}" _j_lnk_static)
+    _json_str("${target_name}" _j_tgt_name)
+    _json_str("${_tgt_type}" _j_tgt_type)
+    _json_str("${_tgt_out_name}" _j_tgt_outname)
+    _json_str("${_tgt_out_dir}" _j_tgt_outdir)
+    _json_str("${_tgt_pic}" _j_tgt_pic)
+    _json_str("${_tgt_cxx_std}" _j_tgt_cxxstd)
+    _json_str("${CMAKE_POSITION_INDEPENDENT_CODE}" _j_cmake_pic)
+    _json_str("${CMAKE_INTERPROCEDURAL_OPTIMIZATION}" _j_cmake_ipo)
+
+    # Optional project-level variables (may not be defined in all projects)
+    set(_j_opt_level "")
+    set(_j_lto "")
+    set(_j_pgo "")
+    set(_j_pgo_mode "")
+    set(_j_dbg_sym "")
+    set(_j_fast_math "")
+    set(_j_arch "")
+    set(_j_use_asan "OFF")
+    set(_j_use_msan "OFF")
+    set(_j_use_tsan "OFF")
+    set(_j_use_ubsan "OFF")
+    set(_j_use_lsan "OFF")
+
+    foreach(_var
+        DCHANNEL_OPTIMIZATION_LEVEL OPT_LEVEL OPTIMIZATION_LEVEL)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_opt_level)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_ENABLE_LTO ENABLE_LTO)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_lto)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_ENABLE_PGO ENABLE_PGO)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_pgo)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_PGO_MODE PGO_MODE)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_pgo_mode)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_DEBUG_SYMBOLS DEBUG_SYMBOLS)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_dbg_sym)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_USE_ASAN USE_ASAN)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_use_asan)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_USE_MSAN USE_MSAN)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_use_msan)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_USE_TSAN USE_TSAN)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_use_tsan)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_USE_UBSAN USE_UBSAN)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_use_ubsan)
+            break()
+        endif()
+    endforeach()
+    foreach(_var DCHANNEL_USE_LSAN USE_LSAN)
+        if(DEFINED ${_var})
+            _json_str("${${_var}}" _j_use_lsan)
+            break()
+        endif()
+    endforeach()
+
+    # Build the JSON string (no external dependencies - pure CMake string ops)
+    set(_json "{\n")
+    string(APPEND _json "  \"project_name\": \"${_j_proj_name}\",\n")
+    string(APPEND _json "  \"project_version\": \"${_j_proj_ver}\",\n")
+    string(APPEND _json "  \"source_dir\": \"${_j_src_dir}\",\n")
+    string(APPEND _json "  \"binary_dir\": \"${_j_bin_dir}\",\n")
+    string(APPEND _json "  \"install_prefix\": \"${_j_install}\",\n")
+    string(APPEND _json "  \"cmake_version\": \"${_j_cmake_ver}\",\n")
+    string(APPEND _json "  \"cmake_generator\": \"${_j_generator}\",\n")
+    string(APPEND _json "  \"cmake_toolchain_file\": \"${_j_toolchain}\",\n")
+    string(APPEND _json "  \"build_type\": \"${_j_build_type}\",\n")
+    string(APPEND _json "  \"cmake_pic\": \"${_j_cmake_pic}\",\n")
+    string(APPEND _json "  \"cmake_ipo\": \"${_j_cmake_ipo}\",\n")
+    string(APPEND _json "  \"cxx_compiler_id\": \"${_j_cxx_id}\",\n")
+    string(APPEND _json "  \"cxx_compiler_version\": \"${_j_cxx_ver}\",\n")
+    string(APPEND _json "  \"cxx_compiler_path\": \"${_j_cxx_path}\",\n")
+    string(APPEND _json "  \"cxx_standard\": \"${_j_cxx_std}\",\n")
+    string(APPEND _json "  \"cxx_flags_global\": \"${_j_cxx_flags}\",\n")
+    string(APPEND _json "  \"cxx_flags_release\": \"${_j_cxx_rel}\",\n")
+    string(APPEND _json "  \"cxx_flags_debug\": \"${_j_cxx_dbg}\",\n")
+    string(APPEND _json "  \"cxx_flags_relwithdeb\": \"${_j_cxx_rwd}\",\n")
+    string(APPEND _json "  \"cxx_flags_minsize\": \"${_j_cxx_min}\",\n")
+    string(APPEND _json "  \"c_compiler_id\": \"${_j_c_id}\",\n")
+    string(APPEND _json "  \"c_compiler_version\": \"${_j_c_ver}\",\n")
+    string(APPEND _json "  \"c_compiler_path\": \"${_j_c_path}\",\n")
+    string(APPEND _json "  \"c_standard\": \"${_j_c_std}\",\n")
+    string(APPEND _json "  \"linker_flags_exe\": \"${_j_lnk_exe}\",\n")
+    string(APPEND _json "  \"linker_flags_shared\": \"${_j_lnk_shared}\",\n")
+    string(APPEND _json "  \"linker_flags_static\": \"${_j_lnk_static}\",\n")
+    string(APPEND _json "  \"target_name\": \"${_j_tgt_name}\",\n")
+    string(APPEND _json "  \"target_type\": \"${_j_tgt_type}\",\n")
+    string(APPEND _json "  \"target_output_name\": \"${_j_tgt_outname}\",\n")
+    string(APPEND _json "  \"target_output_dir\": \"${_j_tgt_outdir}\",\n")
+    string(APPEND _json "  \"target_compile_options\": ${_json_compile_opts},\n")
+    string(APPEND _json "  \"target_link_options\": ${_json_link_opts},\n")
+    string(APPEND _json "  \"target_compile_definitions\": ${_json_compile_defs},\n")
+    string(APPEND _json "  \"target_include_dirs\": ${_json_inc_dirs},\n")
+    string(APPEND _json "  \"target_link_libraries\": ${_json_link_libs},\n")
+    string(APPEND _json "  \"target_pic\": \"${_j_tgt_pic}\",\n")
+    string(APPEND _json "  \"target_cxx_standard\": \"${_j_tgt_cxxstd}\",\n")
+    string(APPEND _json "  \"opt_level\": \"${_j_opt_level}\",\n")
+    string(APPEND _json "  \"lto_enabled\": \"${_j_lto}\",\n")
+    string(APPEND _json "  \"pgo_enabled\": \"${_j_pgo}\",\n")
+    string(APPEND _json "  \"pgo_mode\": \"${_j_pgo_mode}\",\n")
+    string(APPEND _json "  \"debug_symbols\": \"${_j_dbg_sym}\",\n")
+    string(APPEND _json "  \"fast_math\": \"${_j_fast_math}\",\n")
+    string(APPEND _json "  \"arch_baseline\": \"${_j_arch}\",\n")
+    string(APPEND _json "  \"use_asan\": \"${_j_use_asan}\",\n")
+    string(APPEND _json "  \"use_msan\": \"${_j_use_msan}\",\n")
+    string(APPEND _json "  \"use_tsan\": \"${_j_use_tsan}\",\n")
+    string(APPEND _json "  \"use_ubsan\": \"${_j_use_ubsan}\",\n")
+    string(APPEND _json "  \"use_lsan\": \"${_j_use_lsan}\"\n")
+    string(APPEND _json "}\n")
+
+    file(WRITE "${context_file}" "${_json}")
+    message(STATUS "GenerateBuildInfo: context JSON written -> ${context_file}")
+endfunction()
+
+# ==========================================================================
+# Internal: invoke GenerateBuildInfo.py
+# Returns TRUE in result_var on success, FALSE on failure.
+# ==========================================================================
+function(_gbinfo_call_python
+    target_name output_file format context_file binary_path result_var)
+
+    set(${result_var} FALSE PARENT_SCOPE)
+
+    if(NOT GBINFO_PYTHON_EXECUTABLE)
+        return()
+    endif()
+
+    # Locate the Python script next to this cmake file
+    get_filename_component(_gbinfo_script_dir
+        "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
+    set(_py_script "${_gbinfo_script_dir}/GenerateBuildInfo.py")
+
+    if(NOT EXISTS "${_py_script}")
+        message(WARNING
+            "GenerateBuildInfo: Python script not found at '${_py_script}'. "
+            "Falling back to CMake-native implementation.")
+        return()
+    endif()
+
+    set(_py_args
+        "${GBINFO_PYTHON_EXECUTABLE}" "${_py_script}"
+        "--context" "${context_file}"
+        "--output" "${output_file}"
+        "--format" "${format}"
+        "--source-dir" "${CMAKE_SOURCE_DIR}"
+    )
+    if(binary_path AND EXISTS "${binary_path}")
+        list(APPEND _py_args "--target-binary" "${binary_path}")
+    endif()
+
+    execute_process(
+        COMMAND ${_py_args}
+        RESULT_VARIABLE _py_result
+        OUTPUT_VARIABLE _py_output
+        ERROR_VARIABLE _py_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if(_py_result EQUAL 0)
+        if(_py_output)
+            message(STATUS "${_py_output}")
+        endif()
+        set(${result_var} TRUE PARENT_SCOPE)
+    else()
+        message(WARNING
+            "GenerateBuildInfo: Python script failed (exit ${_py_result}). "
+            "Falling back to CMake-native implementation.\n${_py_error}")
+    endif()
+endfunction()
 
 # Function to detect Windows SDK version
 function(get_windows_sdk_version sdk_version_var)
@@ -538,13 +863,13 @@ function(detect_native_tuning target_name native_tuning_var)
         if(flags_str MATCHES "-march=native|-mtune=native|-mcpu=native")
             set(has_native_tuning TRUE)
             set(tuning_type "Yes (native)")
-        # Check for generic tuning (universal optimization)
+            # Check for generic tuning (universal optimization)
         elseif(flags_str MATCHES "-mtune=generic")
             set(tuning_type "Generic (universal)")
-        # Check for generic x86-64 tuning (compatible baseline)
+            # Check for generic x86-64 tuning (compatible baseline)
         elseif(flags_str MATCHES "-march=x86-64")
             set(tuning_type "Generic x86-64")
-        # Check for other specific architecture tuning
+            # Check for other specific architecture tuning
         elseif(flags_str MATCHES "-march=([a-zA-Z0-9_-]+)")
             set(arch_match "${CMAKE_MATCH_1}")
             if(NOT arch_match STREQUAL "native")
@@ -2342,6 +2667,51 @@ function(resolve_git_source_hash search_dir out_var)
 endfunction()
 
 function(generate_build_info_file target_name output_file)
+    # ------------------------------------------------------------------
+    # Python-accelerated path (preferred)
+    # ------------------------------------------------------------------
+    if(GBINFO_PYTHON_EXECUTABLE)
+        # Determine the output format from the project option (default: txt)
+        if(DEFINED DCHANNEL_BUILD_INFO_FORMAT)
+            set(_gbinfo_fmt "${DCHANNEL_BUILD_INFO_FORMAT}")
+        elseif(DEFINED BUILD_INFO_FORMAT)
+            set(_gbinfo_fmt "${BUILD_INFO_FORMAT}")
+        else()
+            set(_gbinfo_fmt "txt")
+        endif()
+        string(TOLOWER "${_gbinfo_fmt}" _gbinfo_fmt)
+
+        # Adjust output file extension to match format (when caller passes a
+        # fixed path the extension override only happens for the python path)
+        get_filename_component(_gbinfo_base "${output_file}" NAME_WE)
+        get_filename_component(_gbinfo_outd "${output_file}" DIRECTORY)
+        set(_gbinfo_outfile "${_gbinfo_outd}/${_gbinfo_base}.${_gbinfo_fmt}")
+
+        # Context JSON path (configure-time, next to output)
+        set(_gbinfo_ctx "${CMAKE_BINARY_DIR}/${target_name}-build-info-context.json")
+
+        # Write context
+        _gbinfo_write_context_json("${target_name}" "${_gbinfo_ctx}")
+
+        # Call Python
+        _gbinfo_call_python(
+            "${target_name}"
+            "${_gbinfo_outfile}"
+            "${_gbinfo_fmt}"
+            "${_gbinfo_ctx}"
+            "" # binary_path - not yet built at configure time
+            _py_ok
+        )
+
+        if(_py_ok)
+            return()
+        endif()
+        # Fall through to CMake-native implementation below
+    endif()
+
+    # ------------------------------------------------------------------
+    # CMake-native fallback implementation
+    # ------------------------------------------------------------------
     # Get basic information
     get_build_host_info(BUILD_HOST BUILD_USER)
     get_os_version_info(OS_NAME OS_VERSION)

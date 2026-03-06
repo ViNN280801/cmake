@@ -1,0 +1,5 @@
+# Any project input files
+*.cmake.in
+
+# Python cache files
+__pycache__/
