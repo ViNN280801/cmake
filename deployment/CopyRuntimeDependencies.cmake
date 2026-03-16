@@ -9,32 +9,32 @@
 # This script runs in CMake SCRIPT mode (cmake -P). It is designed to be
 # invoked as a POST_BUILD command from CMakeLists.txt:
 #
-#   add_custom_command(TARGET MyTarget POST_BUILD
-#     COMMAND ${CMAKE_COMMAND}
-#       -Dtarget_file=$<TARGET_FILE:MyTarget>
-#       [-Ddependency_name_regex=<regex>]
-#       -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/deployment/CopyRuntimeDependencies.cmake
-#     VERBATIM
-#   )
+# add_custom_command(TARGET MyTarget POST_BUILD
+# COMMAND ${CMAKE_COMMAND}
+# -Dtarget_file=$<TARGET_FILE:MyTarget>
+# [-Ddependency_name_regex=<regex>]
+# -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/deployment/CopyRuntimeDependencies.cmake
+# VERBATIM
+# )
 #
 # Parameters (passed via -D on the cmake command line):
-#   target_file            - REQUIRED. Full path to the built binary.
-#   dependency_name_regex  - OPTIONAL. Regex against the dependency filename.
-#                            If omitted, platform-specific defaults are used.
+# target_file            - REQUIRED. Full path to the built binary.
+# dependency_name_regex  - OPTIONAL. Regex against the dependency filename.
+# If omitted, platform-specific defaults are used.
 #
 # Platform defaults (when dependency_name_regex is not specified):
-#   Windows  - vcruntime*, msvcp*, concrt*, ucrtbase*, api-ms-win-*
-#   macOS    - libc++, libc++abi, libunwind
-#   Linux    - libstdc++, libgcc_s, libgomp, libatomic, libc++, libunwind
-#   Other    - all resolved dependencies
+# Windows  - vcruntime*, msvcp*, concrt*, ucrtbase*, api-ms-win-*
+# macOS    - libc++, libc++abi, libunwind
+# Linux    - libstdc++, libgcc_s, libgomp, libatomic, libc++, libunwind
+# Other    - all resolved dependencies
 #
 # Notes:
 # - Requires CMake 3.16+ (file(GET_RUNTIME_DEPENDENCIES) was added in 3.16).
 # - Only already-resolved dependencies are copied; unresolved ones are logged.
 # - System DLLs (kernel32.dll, ntdll.dll, etc.) are intentionally excluded by
-#   the default regex and are never copied.
+# the default regex and are never copied.
 # - On Windows, enable DCHANNEL_COPY_RUNTIME_DEPENDENCIES only for /MD
-#   (dynamic runtime); static /MT builds do not require separate DLLs.
+# (dynamic runtime); static /MT builds do not require separate DLLs.
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.16)
@@ -71,16 +71,37 @@ if(NOT DEFINED dependency_name_regex OR dependency_name_regex STREQUAL "")
 endif()
 
 # --- Resolve runtime dependencies -------------------------------------------
-file(GET_RUNTIME_DEPENDENCIES
-  LIBRARIES "${target_file}"
-  RESOLVED_DEPENDENCIES_VAR   _resolved
-  UNRESOLVED_DEPENDENCIES_VAR _unresolved
-)
+# Use EXECUTABLES for executables (.exe or no .so/.dll/.dylib) so dependencies resolve correctly.
+get_filename_component(_target_name "${target_file}" NAME)
+
+if(WIN32 AND _target_name MATCHES "\\.exe$")
+  set(_use_executables TRUE)
+elseif(UNIX AND NOT _target_name MATCHES "\\.so")
+  set(_use_executables TRUE)
+else()
+  set(_use_executables FALSE)
+endif()
+
+if(_use_executables)
+  file(GET_RUNTIME_DEPENDENCIES
+    EXECUTABLES "${target_file}"
+    RESOLVED_DEPENDENCIES_VAR _resolved
+    UNRESOLVED_DEPENDENCIES_VAR _unresolved
+  )
+else()
+  file(GET_RUNTIME_DEPENDENCIES
+    LIBRARIES "${target_file}"
+    RESOLVED_DEPENDENCIES_VAR _resolved
+    UNRESOLVED_DEPENDENCIES_VAR _unresolved
+  )
+endif()
 
 # --- Copy matched dependencies ----------------------------------------------
 set(_copied_count 0)
+
 foreach(dep ${_resolved})
   get_filename_component(dep_name "${dep}" NAME)
+
   if(dep_name MATCHES "${dependency_name_regex}")
     file(COPY "${dep}" DESTINATION "${output_dir}")
     message(STATUS "CopyRuntimeDependencies: copied '${dep_name}' → '${output_dir}'")
