@@ -114,13 +114,45 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def _infer_build_type_from_binary_path(binary_path: str) -> str:
+    """Infer CMake build type from binary path (e.g. .../Release/foo.dll or .../Debug/...).
+    Used when context has empty build_type (multi-config generators like Visual Studio).
+    """
+    if not binary_path:
+        return ""
+    path_n = binary_path.replace("\\", "/")
+    for cfg in ("Release", "Debug", "RelWithDebInfo", "MinSizeRel"):
+        if f"/{cfg}/" in path_n:
+            return cfg
+    return ""
+
+
 # ===========================================================================
 # Data collectors
 # ===========================================================================
 
 
+def _submodule_git_dir(source_dir: str) -> Optional[str]:
+    """If *source_dir* is a git submodule (.git is a file with gitdir: ...), return resolved git dir."""
+    git_file = Path(source_dir) / ".git"
+    if not git_file.is_file():
+        return None
+    try:
+        line = git_file.read_text(encoding="utf-8", errors="replace").strip()
+        if line.startswith("gitdir:"):
+            raw = line[7:].strip()
+            resolved = (git_file.parent / raw).resolve()
+            if resolved.exists():
+                return str(resolved)
+    except Exception:
+        pass
+    return None
+
+
 def collect_git_info(source_dir: Optional[str]) -> Dict[str, Any]:
-    """Return a dict with git repository metadata from *source_dir*."""
+    """Return a dict with git repository metadata from *source_dir*.
+    When *source_dir* is a submodule (.git file), uses that repo so the commit is the submodule's.
+    """
     git = shutil.which("git")
     if not git:
         return {"available": False, "reason": "git not found in PATH"}
@@ -128,9 +160,25 @@ def collect_git_info(source_dir: Optional[str]) -> Dict[str, Any]:
         return {"available": False, "reason": "source_dir not found"}
 
     cwd = str(source_dir)
+    env = os.environ.copy()
+    submodule_git_dir = _submodule_git_dir(cwd)
+    if submodule_git_dir:
+        env["GIT_DIR"] = submodule_git_dir
 
     def g(*args: str) -> str:
-        return _run([git, *args], cwd=cwd)
+        try:
+            r = subprocess.run(
+                [git, *args],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                cwd=cwd,
+                env=env,
+                check=False,
+            )
+            return r.stdout.strip()
+        except Exception:
+            return ""
 
     # Verify this is actually a git repo
     toplevel = g("rev-parse", "--show-toplevel")
@@ -160,6 +208,8 @@ def collect_git_info(source_dir: Optional[str]) -> Dict[str, Any]:
 
     return {
         "available": True,
+        "is_submodule": submodule_git_dir is not None,
+        "repository_root": toplevel,
         "toplevel": toplevel,
         "branch": branch or "unknown",
         "commit_hash": commit_hash or "unknown",
@@ -491,6 +541,11 @@ def build_report(
     eff_source = source_dir or context.get("source_dir", "") or ""
     eff_binary = binary_path or context.get("target_binary_path", "") or ""
 
+    # Build type: from context, or inferred from binary path (multi-config generators)
+    eff_build_type = (context.get("build_type") or "").strip()
+    if not eff_build_type and eff_binary:
+        eff_build_type = _infer_build_type_from_binary_path(eff_binary)
+
     # Precompute frequently used values
     ci_info = detect_ci()
     plat_info = collect_platform_info()
@@ -519,7 +574,7 @@ def build_report(
             "version": context.get("cmake_version", ""),
             "generator": context.get("cmake_generator", ""),
             "toolchain_file": context.get("cmake_toolchain_file", ""),
-            "build_type": context.get("build_type", ""),
+            "build_type": eff_build_type,
             "configuration_types": context.get("configuration_types", []),
             "source_dir": context.get("source_dir", ""),
             "binary_dir": context.get("binary_dir", ""),
