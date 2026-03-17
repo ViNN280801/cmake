@@ -301,13 +301,44 @@ Build information printing utility.
 
 ### Third-Party Integration (`3rdparty/`)
 
+#### `BoostConfig.cmake`
+
+Universal Boost C++ Libraries integration for CMake projects.
+
+**Functions:**
+
+- `add_boost_dependency([METHOD <FETCH|FIND|SYSTEM>] [VERSION <version>] [COMPONENTS <components...>] ...)`
+- `link_boost_to_target(<target> [COMPONENTS <components...>] [INTERFACE_TARGET <target_name>])`
+
+**Features:**
+
+- Multiple integration methods (FetchContent, find_package, system packages)
+- Configurable Boost version and components
+- Automatic component linking
+- Cross-platform support
+- Flexible build options (shared/static libraries, testing)
+
+**Usage:**
+
+```cmake
+include(cmake/3rdparty/BoostConfig)
+add_boost_dependency(
+    METHOD FETCH
+    VERSION "1.84.0"
+    COMPONENTS system filesystem thread chrono
+    BUILD_SHARED_LIBS ON
+)
+link_boost_to_target(MyTarget COMPONENTS system filesystem)
+```
+
 #### `QtDeployment.cmake`
 
 Qt framework deployment for Windows.
 
 **Functions:**
 
-- `deploy_qt(<target> [QT_VERSION <version>] [COMPONENTS <components...>] ...)`
+- `find_windeployqt([CUSTOM_PATH <path>])`
+- `deploy_qt_dependencies(<target> [QML_DIR <dir>] [RELEASE_ONLY <ON|OFF>] ...)`
 
 **Features:**
 
@@ -376,6 +407,81 @@ Build information script generation.
 - Build script generation
 - Cross-platform script support
 - Build metadata extraction
+
+#### `RecursiveSourceCollection.cmake`
+
+Universal recursive source file collection for C/C++ projects.
+
+**Functions:**
+
+- `collect_sources_recursive(<dir> <result_var> [EXCLUDE_DIRS <dirs...>] [EXCLUDE_PATTERNS <patterns...>] [INCLUDE_EXAMPLES <ON|OFF>] [INCLUDE_TESTS <ON|OFF>] [EXTENSIONS <exts...>])`
+- `collect_sources_recursive_multiple(<result_var> DIRS <dirs...> [EXCLUDE_DIRS <dirs...>] ...)`
+
+**Features:**
+
+- Recursive file discovery without hardcoding file names
+- Configurable exclusion patterns (directories, file patterns)
+- Optional inclusion of examples and tests
+- Support for multiple file extensions (cpp, hpp, c, h, etc.)
+- Flexible filtering options
+
+**Usage:**
+
+```cmake
+include(cmake/utils/RecursiveSourceCollection)
+
+# Collect sources from a single directory
+collect_sources_recursive("${CMAKE_SOURCE_DIR}/src/api" API_SOURCES
+    EXCLUDE_DIRS "3rdparty" "tests"
+    INCLUDE_EXAMPLES OFF
+    INCLUDE_TESTS OFF
+    EXTENSIONS "cpp" "hpp"
+)
+
+# Collect sources from multiple directories
+collect_sources_recursive_multiple(ALL_SOURCES
+    DIRS
+        "${CMAKE_SOURCE_DIR}/src/api"
+        "${CMAKE_SOURCE_DIR}/src/core"
+    EXCLUDE_DIRS "3rdparty" "tests" "test"
+    INCLUDE_EXAMPLES ${BUILD_EXAMPLES}
+    INCLUDE_TESTS OFF
+    EXTENSIONS "cpp" "hpp"
+)
+```
+
+#### `LibraryVersioning.cmake`
+
+Universal library versioning and vendor metadata for shared libraries.
+
+**Functions:**
+
+- `apply_library_versioning(<TARGET_NAME> [LIBRARY_DESCRIPTION <desc>] [PROJECT_VERSION <version>] [VENDOR_NAME <name>] [VENDOR_EMAIL <email>] [VENDOR_COMPANY <company>] [COPYRIGHT_YEAR <year>] ...)`
+
+**Features:**
+
+- Automatic version embedding in shared libraries (.dll, .so)
+- Windows version resource file generation
+- Linux library versioning (SOVERSION, VERSION)
+- Vendor metadata embedding (company, author, contact)
+- Copyright information
+- Cross-platform support
+
+**Usage:**
+
+```cmake
+include(cmake/utils/LibraryVersioning)
+
+apply_library_versioning(
+    TARGET_NAME MyLibrary
+    LIBRARY_DESCRIPTION "My Awesome Library"
+    PROJECT_VERSION "1.2.3"
+    VENDOR_NAME "John Doe"
+    VENDOR_EMAIL "john@example.com"
+    VENDOR_COMPANY "My Company Ltd."
+    COPYRIGHT_YEAR "2025"
+)
+```
 
 ## Usage Example
 
