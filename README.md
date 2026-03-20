@@ -233,6 +233,60 @@ Static analysis tool configuration.
 - Configurable check options
 - Analysis report generation
 
+#### `MaximumStandardCompliance.cmake`
+
+**Project-agnostic** optional **verification** profile for **GCC, Clang, or AppleClang**. The module does not reference any product name; the consumer passes all policy via `maximum_standard_compliance_configure(...)`.
+
+**Function:**
+
+```cmake
+maximum_standard_compliance_configure(
+  TARGET <target>
+  [CXX_STANDARD <11|14|17|20|23|26>]
+  [ALLOWED_COMPILER_IDS <id> ...]          # default: GNU Clang AppleClang
+  [WERROR ON|OFF]
+  [PEDANTIC_ERRORS ON|OFF]
+  [DEPENDENCY_WARNING_MODE STRICT|RELAX_VENDOR|RELAX_VENDOR_AND_SWITCH]
+  [REQUIRE_TOPLEVEL_SOURCE_MATCH ON|OFF]
+  [TOPLEVEL_SOURCE_DIR <path>]             # required if REQUIRE_TOPLEVEL_SOURCE_MATCH is ON
+  [EXTRA_COMPILE_OPTIONS <opt> ...]
+)
+```
+
+**`DEPENDENCY_WARNING_MODE`:**
+
+- `STRICT` - full set including `-Wswitch-default`, `-Wswitch-enum`, `-Wsuggest-override`, `-Wuseless-cast` (GCC), `-Wunused-template` (Clang). With bundled Asio, `-Werror` typically requires either changing this mode or patching headers — **DChannel does not modify `3rdparty/` for that**.
+- `RELAX_VENDOR` - drops the vendor-oriented C++ flags above; still enables switch exhaustiveness flags (may require `default` / full enum coverage in your code).
+- `RELAX_VENDOR_AND_SWITCH` - also omits `-Wswitch-default` and `-Wswitch-enum` (for partial `switch`es over large enums).
+
+**DChannel: `DCHANNEL_MAX_STANDARD_COMPLIANCE_IGNORE_DEPENDENCIES` (default ON)** — when ON, the effective mode is forced to `RELAX_VENDOR` so vendored C++ (e.g. bundled Asio) is not expected to compile under `-Wsuggest-override` / `-Wuseless-cast` / Clang `-Wunused-template` without editing third-party sources. Set OFF to honor `DCHANNEL_MAX_STANDARD_COMPLIANCE_DEPENDENCY_MODE` (e.g. `STRICT` for local experiments).
+
+C-only dependencies are normally isolated with `SYSTEM` / `target_include_directories(... SYSTEM)`; this module does not add include paths.
+
+**DChannel wiring (`CMakeLists.txt`):**
+
+- Enables this module only when `DCHANNEL_MAX_STANDARD_COMPLIANCE` is ON.
+- Enforces **standalone** configure itself (`CMAKE_SOURCE_DIR` must equal the DChannel tree root); not embedded in the generic `.cmake` file.
+- Replaces `configure_compiler_flags(... WARNINGS HIGH ...)` on the library target - **do not** combine both on the same target.
+
+**Cache options:**
+
+- `DCHANNEL_MAX_STANDARD_COMPLIANCE`
+- `DCHANNEL_MAX_STANDARD_COMPLIANCE_WERROR`
+- `DCHANNEL_MAX_STANDARD_COMPLIANCE_PEDANTIC_ERRORS`
+- `DCHANNEL_MAX_STANDARD_COMPLIANCE_IGNORE_DEPENDENCIES` (default ON: force `RELAX_VENDOR`, no `3rdparty` patches)
+- `DCHANNEL_MAX_STANDARD_COMPLIANCE_DEPENDENCY_MODE` (used when ignore is OFF: `STRICT` | `RELAX_VENDOR` | `RELAX_VENDOR_AND_SWITCH`; cache default `RELAX_VENDOR`)
+- `DCHANNEL_CXX_STANDARD` (used only when `CMAKE_CXX_STANDARD` is unset; allowed: 11, 14, 17, 20, 23, 26)
+
+**Example:**
+
+```bash
+cmake -S DChannel -B build-msc -DDCHANNEL_MAX_STANDARD_COMPLIANCE=ON \
+  -DDCHANNEL_MAX_STANDARD_COMPLIANCE_DEPENDENCY_MODE=RELAX_VENDOR \
+  -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-msc
+```
+
 ### Dependencies (`dependencies/`)
 
 #### `DependenciesConfig.cmake`
