@@ -192,7 +192,7 @@ Sanitizer configuration for runtime error detection.
 
 **Functions:**
 
-- `configure_sanitizers(<target> [ASAN <ON|OFF>] [MSAN <ON|OFF>] ...)`
+- `configure_sanitizers(<target> [ADDRESS <ON|OFF>] [MEMORY <ON|OFF>] [THREAD <ON|OFF>] [UNDEFINED <ON|OFF>] [LEAK <ON|OFF>] [CFI <ON|OFF>] ...)`
 
 **Features:**
 
@@ -201,6 +201,40 @@ Sanitizer configuration for runtime error detection.
 - ThreadSanitizer (TSan)
 - UndefinedBehaviorSanitizer (UBSan)
 - LeakSanitizer (LSan)
+- Control Flow Integrity (CFI): `-flto=thin -fvisibility=hidden -fno-pie` (compile), `-no-pie` (link)
+
+#### `SanitizerProfile.cmake`
+
+Universal sanitizer profile helpers (project-agnostic; pair with `SanitizersConfig.cmake`).
+
+**Functions:**
+
+- `sanitizer_profile_validate(<profile> <allowed...>)`
+- `sanitizer_profile_apply(<profile> PREFIX <opt_prefix> [BUILD_TESTS_VAR <var>] [PROJECT_LABEL <name>] [SKIP_IF_NO_TESTS])`
+- `sanitizer_configure_global_settings(PREFIX <opt_prefix> [PROJECT_LABEL <name>] [BUILD_SHARED_LIBS_WARN <ON|OFF>])`
+- `sanitizer_apply_to_target_from_options(<target> PREFIX <opt_prefix> ENABLE_VAR <cache_var>)`
+- `sanitizer_build_uses_any(PREFIX <opt_prefix> OUT <var>)`
+
+**Profiles:** `ASAN_UBSAN`, `TSAN`, `CFI`, `NONE` - sets `${PREFIX}ASAN`, `${PREFIX}UBSAN`, etc.
+
+Project-specific wrappers (e.g. DChannel) should live **outside** this submodule under the consumer tree.
+
+**DChannel example** (`build_support/cmake/DChannelSanitizerIntegration.cmake`):
+
+```cmake
+sanitizer_profile_apply("${DCHANNEL_TEST_SANITIZER_PROFILE}"
+  PREFIX "DCHANNEL_USE_" BUILD_TESTS_VAR DCHANNEL_BUILD_TESTS PROJECT_LABEL "DChannel" SKIP_IF_NO_TESTS)
+```
+
+**Quick build (Linux, DChannel):**
+
+```bash
+./scripts/configure_sanitizer_build.sh asan-ubsan
+./scripts/configure_sanitizer_build.sh tsan
+./scripts/configure_sanitizer_build.sh cfi
+```
+
+Use **one profile per `CMAKE_BINARY_DIR`**. Tests compile by default; they do not run after build unless the consumer sets a run-on-build option.
 
 #### `CoverageConfig.cmake`
 

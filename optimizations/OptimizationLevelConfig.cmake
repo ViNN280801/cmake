@@ -811,16 +811,18 @@ function(_opt_lvl_clang target level enable_lto debug_symbols
   _opt_lvl_detect_arch()
 
   # libc++ is preferred on Clang for full C++20/23 support on non-GNU systems.
-  # On Linux with GCC's libstdc++, this is optional; on macOS/FreeBSD it's the default.
-  check_cxx_compiler_flag("-stdlib=libc++" _opt_lvl_clang_libcxx)
-  if(_opt_lvl_clang_libcxx)
-    target_compile_options(${target} PRIVATE -stdlib=libc++)
-    target_link_options(${target} PRIVATE -stdlib=libc++)
-    if(CMAKE_CXX_STANDARD GREATER_EQUAL 20)
-      target_compile_options(${target} PRIVATE -fexperimental-library)
-      message(STATUS "OptimizationLevelConfig: Clang libc++ + experimental for C++${CMAKE_CXX_STANDARD}")
-    else()
-      message(STATUS "OptimizationLevelConfig: Clang libc++")
+  # MSan builds use MSan-instrumented libc++ via compiler wrappers - not -stdlib=libc++.
+  if(NOT DCHANNEL_USE_MSAN)
+    check_cxx_compiler_flag("-stdlib=libc++" _opt_lvl_clang_libcxx)
+    if(_opt_lvl_clang_libcxx)
+      target_compile_options(${target} PRIVATE -stdlib=libc++)
+      target_link_options(${target} PRIVATE -stdlib=libc++)
+      if(CMAKE_CXX_STANDARD GREATER_EQUAL 20)
+        target_compile_options(${target} PRIVATE -fexperimental-library)
+        message(STATUS "OptimizationLevelConfig: Clang libc++ + experimental for C++${CMAKE_CXX_STANDARD}")
+      else()
+        message(STATUS "OptimizationLevelConfig: Clang libc++")
+      endif()
     endif()
   endif()
 

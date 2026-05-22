@@ -154,6 +154,10 @@ function(configure_sanitizers target)
       message(FATAL_ERROR "SanitizersConfig: TSan and MSan cannot be used together. "
         "Use separate builds. Set ALLOW_UNSUPPORTED ON to override (not recommended).")
     endif()
+    if(SANITIZER_CFI AND SANITIZER_MEMORY)
+      message(FATAL_ERROR "SanitizersConfig: CFI and MSan cannot be used together. "
+        "Use separate builds. Set ALLOW_UNSUPPORTED ON to override (not recommended).")
+    endif()
 
     # --- Compiler-specific: MSan is Clang-only ---
     if(SANITIZER_MEMORY AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -339,7 +343,8 @@ endfunction()
 # CFI requires LTO and -fvisibility=hidden (see gcc_clang_sanitizers.md)
 # =============================================================================
 function(_configure_clang_sanitizers target address memory thread undefined leak cfi options extra_flags compiler_flags)
-  set(clang_flags "")
+  set(clangCompileFlags "")
+  set(clangLinkFlags "")
 
   # Build sanitizer list
   set(sanitizers "")
@@ -378,26 +383,36 @@ function(_configure_clang_sanitizers target address memory thread undefined leak
 
   if(cfi)
     list(APPEND sanitizers "cfi")
-    list(APPEND clang_flags -flto=thin)
-    list(APPEND clang_flags -fvisibility=hidden)
   endif()
 
   # Apply sanitizer flags
   if(sanitizers)
-    string(REPLACE ";" "," sanitizer_list "${sanitizers}")
-    list(APPEND clang_flags -fsanitize=${sanitizer_list})
-    list(APPEND clang_flags -fno-omit-frame-pointer)  # Required for proper stack traces
-    list(APPEND clang_flags -g)  # Debug symbols required
+    string(REPLACE ";" "," sanitizerList "${sanitizers}")
+    list(APPEND clangCompileFlags -fsanitize=${sanitizerList})
+    list(APPEND clangCompileFlags -fno-omit-frame-pointer)
+    list(APPEND clangCompileFlags -g)
+
+    list(APPEND clangLinkFlags -fsanitize=${sanitizerList})
+    list(APPEND clangLinkFlags -fno-omit-frame-pointer)
+    list(APPEND clangLinkFlags -g)
+
+    if(cfi)
+      # CFI needs LTO + hidden visibility at compile time; link with -no-pie on Linux PIE defaults.
+      # -fsplit-lto-unit: one thin-LTO unit per source file so static deps link consistently.
+      list(APPEND clangCompileFlags -flto=thin -fsplit-lto-unit -fvisibility=hidden -fno-pie)
+      list(APPEND clangLinkFlags -flto=thin -fsplit-lto-unit -no-pie)
+    endif()
 
     # MemorySanitizer requires special flags
     if(memory)
-      list(APPEND clang_flags -fno-optimize-sibling-calls)
-      list(APPEND clang_flags -fno-omit-frame-pointer)
+      list(APPEND clangCompileFlags -fno-optimize-sibling-calls)
+      list(APPEND clangCompileFlags -fsanitize-memory-track-origins=2 -O1)
+      list(APPEND clangLinkFlags -fsanitize-memory-track-origins=2 -O1)
     endif()
 
-    target_compile_options(${target} PRIVATE ${clang_flags})
-    target_link_options(${target} PRIVATE ${clang_flags})
-    message(STATUS "SanitizersConfig: Clang sanitizers enabled for '${target}': ${sanitizer_list}")
+    target_compile_options(${target} PRIVATE ${clangCompileFlags})
+    target_link_options(${target} PRIVATE ${clangLinkFlags})
+    message(STATUS "SanitizersConfig: Clang sanitizers enabled for '${target}': ${sanitizerList}")
   endif()
   # Apply extra flags
   if(extra_flags)
