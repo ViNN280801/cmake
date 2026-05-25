@@ -101,11 +101,16 @@ function(_gbinfo_write_context_json target_name context_file)
     _list_to_json(_tgt_inc_dirs _json_inc_dirs)
     _list_to_json(_tgt_link_libs _json_link_libs)
 
-    # Sanitize a string for JSON (escape backslashes and double-quotes)
-    macro(_json_str _in _out)
-        string(REPLACE "\\" "\\\\" ${_out} "${_in}")
-        string(REPLACE "\"" "\\\"" ${_out} "${${_out}}")
-    endmacro()
+    # Sanitize a string for JSON (escape backslashes and double-quotes).
+    # Implemented as a function (not macro) so that CMake 4.x does not apply
+    # escape-sequence validation to the expanded argument value (e.g. Windows
+    # paths contain \P, \1, etc. which CMake 4.x rejects in macro text substitution).
+    function(_json_str _in _out)
+        set(_result "${_in}")
+        string(REPLACE "\\" "\\\\" _result "${_result}")
+        string(REPLACE "\"" "\\\"" _result "${_result}")
+        set(${_out} "${_result}" PARENT_SCOPE)
+    endfunction()
 
     _json_str("${PROJECT_NAME}" _j_proj_name)
     _json_str("${PROJECT_VERSION}" _j_proj_ver)
