@@ -21,6 +21,9 @@
 # target_file            - REQUIRED. Full path to the built binary.
 # dependency_name_regex  - OPTIONAL. Regex against the dependency filename.
 # If omitted, platform-specific defaults are used.
+# skip_compiler_runtime  - OPTIONAL. When ON, do not copy libstdc++/libgcc_s (shared
+#                          libs built in-tree: avoids stale libstdc++ in BUILD_RPATH
+#                          dirs that breaks linking of dependent executables).
 #
 # Platform defaults (when dependency_name_regex is not specified):
 # Windows  - vcruntime*, msvcp*, concrt*, ucrtbase*, api-ms-win-*
@@ -62,8 +65,13 @@ if(NOT DEFINED dependency_name_regex OR dependency_name_regex STREQUAL "")
   elseif(UNIX)
     # libstdc++ / libgcc_s (GCC), libc++ / libunwind (Clang),
     # libgomp (OpenMP), libatomic (C++ atomics)
-    set(dependency_name_regex
-      "^(libstdc\\+\\+|libgcc_s|libgomp|libatomic|libquadmath|libc\\+\\+|libc\\+\\+abi|libunwind)")
+    if(skip_compiler_runtime)
+      set(dependency_name_regex
+        "^(libgomp|libatomic|libquadmath|libc\\+\\+|libc\\+\\+abi|libunwind)")
+    else()
+      set(dependency_name_regex
+        "^(libstdc\\+\\+|libgcc_s|libgomp|libatomic|libquadmath|libc\\+\\+|libc\\+\\+abi|libunwind)")
+    endif()
   else()
     # Unknown host: copy everything that was resolved
     set(dependency_name_regex ".*")
