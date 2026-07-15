@@ -10,34 +10,43 @@
 # invoked as a POST_BUILD command from CMakeLists.txt:
 #
 # add_custom_command(TARGET MyTarget POST_BUILD
-# COMMAND ${CMAKE_COMMAND}
-# -Dtarget_file=$<TARGET_FILE:MyTarget>
-# [-Ddependency_name_regex=<regex>]
-# -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/deployment/CopyRuntimeDependencies.cmake
-# VERBATIM
+#   COMMAND ${CMAKE_COMMAND}
+#     -Dtarget_file=$<TARGET_FILE:MyTarget>
+#     [-Ddependency_name_regex=<regex>]
+#     [-Dreport_unresolved=ON]
+#     -P ${path}/CopyRuntimeDependencies.cmake
+#   VERBATIM
 # )
 #
 # Parameters (passed via -D on the cmake command line):
-# target_file            - REQUIRED. Full path to the built binary.
-# dependency_name_regex  - OPTIONAL. Regex against the dependency filename.
-# If omitted, platform-specific defaults are used.
-# skip_compiler_runtime  - OPTIONAL. When ON, do not copy libstdc++/libgcc_s (shared
-#                          libs built in-tree: avoids stale libstdc++ in BUILD_RPATH
-#                          dirs that breaks linking of dependent executables).
+#   target_file            - REQUIRED. Full path to the built binary.
+#   dependency_name_regex  - OPTIONAL. Regex against the dependency filename.
+#                            If omitted, platform-specific defaults are used.
+#   skip_compiler_runtime  - OPTIONAL. When ON, do not copy libstdc++/libgcc_s
+#                            (shared libs built in-tree: avoids stale libstdc++
+#                            in BUILD_RPATH dirs that breaks linking of
+#                            dependent executables).
+#   report_unresolved      - OPTIONAL. When ON, log each unresolved dependency
+#                            (informational; usually system/API-set DLLs).
+#                            Default: OFF (keeps build output quiet).
 #
 # Platform defaults (when dependency_name_regex is not specified):
-# Windows  - vcruntime*, msvcp*, concrt*, ucrtbase*, api-ms-win-*
-# macOS    - libc++, libc++abi, libunwind
-# Linux    - libstdc++, libgcc_s, libgomp, libatomic, libc++, libunwind
-# Other    - all resolved dependencies
+#   Windows  - msvcp140(.dll|_*.dll), vcruntime140(.dll|_*.dll)
+#              (MSVC CRT redistributable subset; excludes MFC, OpenMP, concrt,
+#              ucrtbase, api-ms-win-*). Override via dependency_name_regex for
+#              a broader set, e.g. "^(vcruntime|msvcp|concrt|ucrtbase|api-ms-win)".
+#   macOS    - libc++, libc++abi, libunwind
+#   Linux    - libstdc++, libgcc_s, libgomp, libatomic, libc++, libunwind
+#   Other    - all resolved dependencies
 #
 # Notes:
 # - Requires CMake 3.16+ (file(GET_RUNTIME_DEPENDENCIES) was added in 3.16).
-# - Only already-resolved dependencies are copied; unresolved ones are logged.
+# - Only already-resolved dependencies are copied; unresolved ones are optional
+#   to log (see report_unresolved).
 # - System DLLs (kernel32.dll, ntdll.dll, etc.) are intentionally excluded by
-# the default regex and are never copied.
-# - On Windows, enable DCHANNEL_COPY_RUNTIME_DEPENDENCIES only for /MD
-# (dynamic runtime); static /MT builds do not require separate DLLs.
+#   the default regex and are never copied.
+# - On Windows, enable runtime-copy only for /MD (dynamic runtime); static /MT
+#   builds do not require separate DLLs.
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.16)
@@ -54,10 +63,10 @@ get_filename_component(output_dir "${target_file}" DIRECTORY)
 # --- Platform-specific default regex ----------------------------------------
 if(NOT DEFINED dependency_name_regex OR dependency_name_regex STREQUAL "")
   if(WIN32)
-    # MSVC CRT (vcruntime140, msvcp140, concrt140, ucrtbase)
-    # Universal CRT forwarder DLLs (api-ms-win-crt-*)
+    # MSVC CRT redistributable subset: msvcp140.dll / msvcp140_*.dll /
+    # vcruntime140.dll / vcruntime140_*.dll
     set(dependency_name_regex
-      "^(vcruntime|msvcp|concrt|ucrtbase|api-ms-win)")
+      "^(msvcp140|vcruntime140)(_.*)?\\.dll$")
   elseif(APPLE)
     # libc++, libc++abi, libunwind shipped with Clang/libc++
     set(dependency_name_regex
@@ -122,8 +131,10 @@ if(_copied_count EQUAL 0)
     "(regex='${dependency_name_regex}')")
 endif()
 
-# --- Report unresolved (informational only) ---------------------------------
-foreach(dep ${_unresolved})
-  message(STATUS "CopyRuntimeDependencies: unresolved dependency '${dep}' "
-    "(expected for system libraries)")
-endforeach()
+# --- Report unresolved (optional; default OFF) ------------------------------
+if(report_unresolved)
+  foreach(dep ${_unresolved})
+    message(STATUS "CopyRuntimeDependencies: unresolved dependency '${dep}' "
+      "(expected for system libraries)")
+  endforeach()
+endif()
