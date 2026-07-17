@@ -114,15 +114,36 @@ else()
 endif()
 
 # --- Copy matched dependencies ----------------------------------------------
+# On Linux/macOS, GET_RUNTIME_DEPENDENCIES often returns a soname symlink
+# (e.g. libstdc++.so.6 -> libstdc++.so.6.0.33). file(COPY) of a symlink alone
+# leaves a dangling link in the output dir. Always copy the real file under the
+# soname the loader looks for (regular file, same content).
 set(_copied_count 0)
 
 foreach(dep ${_resolved})
   get_filename_component(dep_name "${dep}" NAME)
 
   if(dep_name MATCHES "${dependency_name_regex}")
-    file(COPY "${dep}" DESTINATION "${output_dir}")
-    message(STATUS "CopyRuntimeDependencies: copied '${dep_name}' → '${output_dir}'")
-    math(EXPR _copied_count "${_copied_count} + 1")
+    get_filename_component(dep_real "${dep}" REALPATH)
+    if(NOT EXISTS "${dep_real}")
+      message(WARNING
+        "CopyRuntimeDependencies: resolved path missing for '${dep_name}': '${dep}'")
+      continue()
+    endif()
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+              "${dep_real}" "${output_dir}/${dep_name}"
+      RESULT_VARIABLE _copy_rc
+      ERROR_VARIABLE _copy_err
+      OUTPUT_QUIET
+    )
+    if(_copy_rc EQUAL 0)
+      message(STATUS "CopyRuntimeDependencies: copied '${dep_name}' → '${output_dir}'")
+      math(EXPR _copied_count "${_copied_count} + 1")
+    else()
+      message(WARNING
+        "CopyRuntimeDependencies: failed to copy '${dep_name}': ${_copy_err}")
+    endif()
   endif()
 endforeach()
 
