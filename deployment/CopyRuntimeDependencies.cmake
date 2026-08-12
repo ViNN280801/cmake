@@ -31,10 +31,12 @@
 #                            Default: OFF (keeps build output quiet).
 #
 # Platform defaults (when dependency_name_regex is not specified):
-#   Windows  - msvcp140(.dll|_*.dll), vcruntime140(.dll|_*.dll)
-#              (MSVC CRT redistributable subset; excludes MFC, OpenMP, concrt,
-#              ucrtbase, api-ms-win-*). Override via dependency_name_regex for
-#              a broader set, e.g. "^(vcruntime|msvcp|concrt|ucrtbase|api-ms-win)".
+#   Windows  - msvcp140 / vcruntime140 (+ optional _* segments and/or trailing
+#              Debug "d" before .dll). Examples: msvcp140.dll, msvcp140d.dll,
+#              vcruntime140_1.dll, vcruntime140_1d.dll.
+#              Excludes MFC, OpenMP, concrt, ucrtbase, api-ms-win-*.
+#              Override via dependency_name_regex for a broader set, e.g.
+#              "^(vcruntime|msvcp|concrt|ucrtbase|api-ms-win)".
 #   macOS    - libc++, libc++abi, libunwind
 #   Linux    - libstdc++, libgcc_s, libgomp, libatomic, libc++, libunwind
 #   Other    - all resolved dependencies
@@ -63,10 +65,15 @@ get_filename_component(output_dir "${target_file}" DIRECTORY)
 # --- Platform-specific default regex ----------------------------------------
 if(NOT DEFINED dependency_name_regex OR dependency_name_regex STREQUAL "")
   if(WIN32)
-    # MSVC CRT redistributable subset: msvcp140.dll / msvcp140_*.dll /
-    # vcruntime140.dll / vcruntime140_*.dll
+    # MSVC CRT redistributable subset.
+    # Release: msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll, msvcp140_*.dll
+    # Debug:   msvcp140d.dll, vcruntime140d.dll, vcruntime140_1d.dll
+    # The optional trailing "d" is required: Debug CRT uses a bare "d" suffix
+    # (msvcp140d.dll), not only underscore forms (vcruntime140_1d.dll). A regex
+    # of only "(_.*)?" matches the latter and silently skips the former - which
+    # looks like "deploy stopped after the first DLL" on Debug /MDd builds.
     set(dependency_name_regex
-      "^(msvcp140|vcruntime140)(_.*)?\\.dll$")
+      "^(msvcp140|vcruntime140)([_].*)?d?\\.dll$")
   elseif(APPLE)
     # libc++, libc++abi, libunwind shipped with Clang/libc++
     set(dependency_name_regex
